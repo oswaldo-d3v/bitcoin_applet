@@ -1,5 +1,6 @@
 #!/usr/bin/python3
 
+from concurrent.futures import thread
 import time
 import threading
 import gi
@@ -13,14 +14,14 @@ gi.require_version('AppIndicator3', '0.1')
 
 from gi.repository import AppIndicator3 as appindicator
 from gi.repository import Gtk as gtk
-from datetime import datetime
+from datetime import datetime as dt
 
 database = 'DataBase.sqlite'
 tabla = 'BTC_VALUES'
 
 
 def get_datetime():
-    now_datetime = datetime.today()
+    now_datetime = dt.today()
     return now_datetime.strftime('%Y-%m-%d'), now_datetime.strftime('%H:%M')
 
 
@@ -44,11 +45,11 @@ def create_table():
 
 
 def insert_value(value):
-    now = get_datetime()
+    fecha, hora = get_datetime()
     conn = sqlite3.connect(database)
     cursor = conn.cursor()
-    cmd = f'''INSERT INTO {tabla}(fecha, hora, valor) VALUES ('{now[0]}', '{now[1]}', '{value}')'''
-    cursor.execute(cmd)
+    cmd = f'INSERT INTO {tabla}(fecha, hora, valor) VALUES (?, ?, ?)'
+    cursor.execute(cmd, (fecha, hora, value))
     conn.commit()
     conn.close()
 
@@ -58,13 +59,10 @@ def end_element():
     cursor = conn.cursor()
     cmd = f'SELECT * FROM {tabla} ORDER BY id DESC LIMIT 1'
     cursor.execute(cmd)
-    datos = cursor.fetchall()
+    datos = cursor.fetchone()
     conn.commit()
     conn.close()
-    if len(datos) != 0:
-        return datos[0][3]
-    else:
-        return 'Conectando...'
+    return datos[3] if datos else 'Conectando...'
 
 
 def start_database():
@@ -81,39 +79,44 @@ url = 'https://api.coinbase.com/v2/prices/BTC-USD/buy'
 
 def btc_value():
     start_database()
+    btc = end_element()
     try:
         res = requests.get(url)
-        if res.status_code == 200:
+        if res.status_code == requests.codes.ok:
             btc = json.loads(res.content)['data']['amount']
             insert_value(btc)
-            return f' {btc}$'
-        else:
-            return f' {end_element()}$ L'
-    except:
-        return f' {end_element()}$ E'
+            return f'{btc}$'
+    except requests.exceptions.ConnectionError:
+      return f'{btc}$ D'
+    except requests.exceptions.HTTPError:
+      return f'{btc}$ H'
+    except requests.exceptions.Timeout:
+      return f'{btc}$ T'
+    except requests.exceptions.TooManyRedirects:
+      return f'{btc}$ R'
+    return f'{btc}$ L'
 
 
 # APPLET BTC
 
 
 id = 'AppletBTC'
-icon = '/home/oswaldo/Escritorio/AppletBTC/bitcoin.svg'
+icon = '/home/oswaldo/Documentos/Programacion/Python/AppletBTC/bitcoin.svg'
 applet = appindicator.Indicator.new(id, icon, appindicator.IndicatorCategory.APPLICATION_STATUS)
 
 
 def update_services():
     while True:
-        time.sleep(60)
         applet.set_label(btc_value(), '')
+        time.sleep(60)
 
 
 def main():
-    update_btc = threading.Thread(target=update_services)
-    update_btc.daemon = True
+    update_btc = threading.Thread(name='Actualizar valor BTC', target=update_services)
+    update_btc.setDaemon(True)
     applet.set_status(appindicator.IndicatorStatus.ACTIVE)
-    applet.set_label(btc_value(), '')
-    applet.set_menu(_menu())
     update_btc.start()
+    applet.set_menu(_menu())
     gtk.main()
 
 
